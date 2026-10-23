@@ -1,0 +1,47 @@
+[project]
+name = "alarm-clock"
+version = "0.1.0"
+description = "A terminal alarm clock: saved alarms plus a foreground runner that rings."
+authors = [
+    { name = "kushal-khare-official", email = "kushalkhare.official@gmail.com" }
+]
+requires-python = ">=3.11"
+dependencies = [
+    "rich>=15.0.0",
+    "typer>=0.27.3",
+    "tzdata>=2026.5 ; sys_platform == 'win32'",
+    "tzlocal>=5.4.5",
+]
+
+[project.scripts]
+alarm = "alarm_clock.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.10.0,<0.11.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.170.8",
+    "mypy>=2.4.0",
+    "pytest>=9.1.1",
+    "ruff>=0.17.2",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PT"]
+
+[tool.mypy]
+strict = true
+files = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not e2e' --strict-markers"
+markers = [
+    "e2e: drives the real CLI through a pseudo-terminal (POSIX only, slow: waits for a real minute boundary)",
+]
