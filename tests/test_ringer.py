@@ -30,9 +30,10 @@ def wait_until(condition: Callable[[], bool], timeout: float = 3.0) -> None:
 class FakeProc:
     """A player process that runs until the test finishes it or the ringer terminates it."""
 
-    def __init__(self) -> None:
+    def __init__(self, exit_code: int = 0) -> None:
         self._done = threading.Event()
         self.terminated = False
+        self.exit_code = exit_code
 
     def finish(self) -> None:
         self._done.set()
@@ -40,7 +41,7 @@ class FakeProc:
     def wait(self, timeout: float | None = None) -> int:
         if not self._done.wait(timeout):
             raise subprocess.TimeoutExpired("fake", timeout or 0)
-        return 0
+        return -15 if self.terminated else self.exit_code
 
     def poll(self) -> int | None:
         return 0 if self._done.is_set() else None
@@ -216,3 +217,33 @@ def test_winsound_loops_asynchronously_and_stops() -> None:
     ringer.start()
     ringer.stop()
     assert calls == [("SystemExclamation", 0x10000 | 0x1 | 0x8), (None, 0)]
+
+
+def test_player_that_exits_with_an_error_falls_back_to_the_bell() -> None:
+    """e.g. afplay with no output device: it starts fine, then exits 1 having made no sound."""
+
+    def failing(*_: Any, **__: Any) -> FakeProc:
+        proc = FakeProc(exit_code=1)
+        proc.finish()
+        return proc
+
+    stream = io.StringIO()
+    ringer = LoopingCommandRinger(
+        ["afplay", MAC_SOUND], popen=failing, pause=0, fallback=BellRinger(stream, interval=0.01)
+    )
+    ringer.start()
+    wait_until(lambda: stream.getvalue().count("\a") >= 2)
+    ringer.stop()
+    assert isinstance(ringer.failed, subprocess.CalledProcessError)
+
+
+def test_real_player_failure_falls_back_to_the_bell() -> None:
+    """No mocks: a real child that exits 1, like a player that cannot open its device."""
+    stream = io.StringIO()
+    ringer = LoopingCommandRinger(
+        [sys.executable, "-c", "raise SystemExit(1)"], fallback=BellRinger(stream, interval=0.01)
+    )
+    ringer.start()
+    wait_until(lambda: "\a" in stream.getvalue())
+    ringer.stop()
+    assert isinstance(ringer.failed, subprocess.CalledProcessError)

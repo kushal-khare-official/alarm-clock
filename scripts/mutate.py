@@ -29,8 +29,8 @@ MUTATIONS = [
         "grace is exclusive (< instead of <=)",
         [
             (
-                "        if late_by <= grace:\n            return Ring(latest",
-                "        if late_by < grace:\n            return Ring(latest",
+                "        if excused_lateness(latest, now, busy) <= grace:",
+                "        if excused_lateness(latest, now, busy) < grace:",
             )
         ],
     ),
@@ -93,6 +93,40 @@ MUTATIONS = [
             (
                 "        until = self._clock.now() + timedelta(minutes=alarm.snooze_minutes)",
                 "        until = self._clock.now() + timedelta(minutes=5)",
+            )
+        ],
+    ),
+    (
+        "src/alarm_clock/schedule.py",
+        "tests/test_schedule.py",
+        "busy (ringing) time not excused",
+        [("            late -= overlap\n", "            pass\n")],
+    ),
+    (
+        "src/alarm_clock/runner.py",
+        "tests/test_runner.py",
+        "no tick slack on the grace window",
+        [
+            (
+                "        grace = self._config.grace + timedelta(seconds=self._config.tick)\n",
+                "        grace = self._config.grace\n",
+            )
+        ],
+    ),
+    (
+        "src/alarm_clock/ringer.py",
+        "tests/test_ringer.py",
+        "player exit status ignored",
+        [("            if code != 0:  #", "            if False:  #")],
+    ),
+    (
+        "src/alarm_clock/store.py",
+        "tests/test_store.py",
+        "no lock around read-modify-write",
+        [
+            (
+                "from alarm_clock.lock import exclusive\n",
+                "from contextlib import nullcontext as exclusive\n",
             )
         ],
     ),

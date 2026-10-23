@@ -13,7 +13,17 @@ from datetime import datetime, time
 from pathlib import Path
 from typing import Any
 
-from alarm_clock.model import DAY_NAMES, Alarm, AlarmError, AlarmState, format_time, parse_time
+from alarm_clock.lock import exclusive
+from alarm_clock.model import (
+    DAY_NAMES,
+    SNOOZE_MAX,
+    SNOOZE_MIN,
+    Alarm,
+    AlarmError,
+    AlarmState,
+    format_time,
+    parse_time,
+)
 
 SCHEMA_VERSION = 1
 
@@ -86,15 +96,26 @@ def _alarm_to_json(alarm: Alarm) -> dict[str, Any]:
     }
 
 
+def _typed(raw: dict[str, Any], key: str, kind: type) -> Any:
+    """Strict: a hand-edited "false" must not become True, nor 9.5 become 9."""
+    value = raw[key]
+    if not isinstance(value, kind) or (kind is int and isinstance(value, bool)):
+        raise ValueError(f"{key} must be {kind.__name__}, got {value!r}")
+    return value
+
+
 def _alarm_from_json(raw: dict[str, Any]) -> Alarm:
+    snooze = _typed(raw, "snooze_minutes", int)
+    if not SNOOZE_MIN <= snooze <= SNOOZE_MAX:
+        raise ValueError(f"snooze_minutes must be {SNOOZE_MIN}-{SNOOZE_MAX}, got {snooze}")
     return Alarm(
-        id=int(raw["id"]),
-        at=parse_time(raw["at"]),
-        days=frozenset(DAY_NAMES.index(d) for d in raw["days"]),
-        label=str(raw["label"]),
-        enabled=bool(raw["enabled"]),
-        snooze_minutes=int(raw["snooze_minutes"]),
-        anchor=_instant(raw["anchor"]),
+        id=_typed(raw, "id", int),
+        at=parse_time(_typed(raw, "at", str)),
+        days=frozenset(DAY_NAMES.index(d) for d in _typed(raw, "days", list)),
+        label=_typed(raw, "label", str),
+        enabled=_typed(raw, "enabled", bool),
+        snooze_minutes=snooze,
+        anchor=_instant(_typed(raw, "anchor", str)),
     )
 
 
@@ -114,6 +135,9 @@ class AlarmStore:
 
     def __init__(self, path: Path) -> None:
         self.path = path
+        # Several CLI processes can write at once (a script, two terminals). Each
+        # read-modify-write holds this lock so none of them loses another's change (ADR-007).
+        self._write_lock = path.with_name(path.name + ".lock")
 
     def _read(self) -> tuple[int, list[Alarm]]:
         data = read_json(self.path)
@@ -145,9 +169,10 @@ class AlarmStore:
     def add(
         self, at: time, days: frozenset[int], label: str, snooze_minutes: int, now: datetime
     ) -> Alarm:
-        next_id, alarms = self._read()
-        alarm = Alarm(next_id, at, days, label, True, snooze_minutes, anchor=now)
-        self._write(next_id + 1, [*alarms, alarm])
+        with exclusive(self._write_lock):
+            next_id, alarms = self._read()
+            alarm = Alarm(next_id, at, days, label, True, snooze_minutes, anchor=now)
+            self._write(next_id + 1, [*alarms, alarm])
         return alarm
 
     def update(
@@ -190,17 +215,19 @@ class AlarmStore:
         return self._modify(alarm_id, change)
 
     def remove(self, alarm_id: int) -> Alarm:
-        next_id, alarms = self._read()
-        victim = _find(alarms, alarm_id)
-        self._write(next_id, [a for a in alarms if a.id != alarm_id])
+        with exclusive(self._write_lock):
+            next_id, alarms = self._read()
+            victim = _find(alarms, alarm_id)
+            self._write(next_id, [a for a in alarms if a.id != alarm_id])
         return victim
 
     def _modify(self, alarm_id: int, change: Callable[[Alarm], Alarm]) -> Alarm:
-        next_id, alarms = self._read()
-        current = _find(alarms, alarm_id)
-        updated = change(current)
-        if updated != current:
-            self._write(next_id, [updated if a.id == alarm_id else a for a in alarms])
+        with exclusive(self._write_lock):
+            next_id, alarms = self._read()
+            current = _find(alarms, alarm_id)
+            updated = change(current)
+            if updated != current:
+                self._write(next_id, [updated if a.id == alarm_id else a for a in alarms])
         return updated
 
     def signature(self) -> tuple[int, int, int] | None:

@@ -91,7 +91,7 @@ class LoopingCommandRinger:
         self._stopped = threading.Event()
         self._proc: Process | None = None
         self._thread: threading.Thread | None = None
-        self.failed: OSError | None = None
+        self.failed: Exception | None = None  # why we fell back to the bell
 
     def start(self) -> None:
         self._stopped.clear()
@@ -112,7 +112,15 @@ class LoopingCommandRinger:
                     self._fallback.start()
                     return
                 self._proc = proc
-            proc.wait()
+            code = proc.wait()
+            if self._stopped.is_set():
+                return
+            if code != 0:  # no audio device, unreadable file...: it made no sound
+                with self._lock:
+                    if not self._stopped.is_set():
+                        self.failed = subprocess.CalledProcessError(code, self._argv)
+                        self._fallback.start()
+                return
             if self._stopped.wait(self._pause):
                 return
 

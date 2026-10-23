@@ -17,7 +17,16 @@ from alarm_clock.fmt import format_duration, format_when
 from alarm_clock.keys import KeyReader
 from alarm_clock.model import Alarm, AlarmState, format_time
 from alarm_clock.ringer import Ringer
-from alarm_clock.schedule import Idle, Missed, Ring, evaluate, mark_handled, mark_snoozed
+from alarm_clock.schedule import (
+    Decision,
+    Idle,
+    Interval,
+    Missed,
+    Ring,
+    evaluate,
+    mark_handled,
+    mark_snoozed,
+)
 from alarm_clock.store import AlarmStore, StateStore, StoreError
 
 Outcome = Literal["dismissed", "snoozed", "unanswered", "interrupted"]
@@ -70,6 +79,7 @@ class Runner:
         self._signature: tuple[int, int, int] | None = None
         self._states = states.load()
         self._last_watching: tuple[int, int | None, datetime | None] | None = None
+        self._busy: list[Interval] = []  # recent ring windows, excused from lateness (ADR-015)
 
     # --- loop ----------------------------------------------------------------------------------
 
@@ -84,27 +94,50 @@ class Runner:
 
     def tick(self) -> None:
         self._reload_if_changed()
-        for alarm in list(self._alarms):
-            # Fresh `now` per alarm: a ring before this one may have taken minutes.
-            now = self._clock.now()
-            state = self._states.get(alarm.id, AlarmState())
-            decision = evaluate(alarm, state, now, self._config.grace, self._tz)
+        upcoming: list[tuple[datetime, Alarm]] = []
+        for alarm_id in [a.id for a in self._alarms]:
+            # Look the alarm up afresh: a ring before this one may have taken minutes, during
+            # which the CLI could have edited, disabled or removed it.
+            alarm = next((a for a in self._alarms if a.id == alarm_id), None)
+            if alarm is None:
+                continue
+            decision = self._evaluate(alarm)
             if isinstance(decision, Ring):
-                self._ring(alarm, state, decision)
+                self._ring(alarm, self._state(alarm), decision)
+                self._reload_if_changed()
             elif isinstance(decision, Missed):
-                self._record(alarm.id, mark_handled(state, decision.occurrence))
+                self._record(alarm.id, mark_handled(self._state(alarm), decision.occurrence))
                 self._display.event(self._missed_text(alarm, decision))
-        self._show_watching()
+            if not isinstance(decision, Idle):  # handled now; what's its next time?
+                refreshed = next((a for a in self._alarms if a.id == alarm_id), None)
+                if refreshed is None:
+                    continue
+                alarm, decision = refreshed, self._evaluate(refreshed)
+            if isinstance(decision, Idle) and decision.next_at is not None:
+                upcoming.append((decision.next_at, alarm))
+        self._show_watching(upcoming)
+
+    def _state(self, alarm: Alarm) -> AlarmState:
+        return self._states.get(alarm.id, AlarmState())
+
+    def _evaluate(self, alarm: Alarm) -> Decision:
+        now = self._clock.now()
+        # Noticing an alarm within one tick counts as on time, so `--grace 0` still rings.
+        grace = self._config.grace + timedelta(seconds=self._config.tick)
+        horizon = now - grace - self._config.ring_timeout - timedelta(days=1)
+        self._busy = [(start, end) for start, end in self._busy if end > horizon]
+        return evaluate(alarm, self._state(alarm), now, grace, self._tz, self._busy)
 
     # --- ringing -------------------------------------------------------------------------------
 
     def _ring(self, alarm: Alarm, state: AlarmState, ring: Ring) -> None:
         self._keys.flush()  # a key pressed before the ring must not answer it (ADR-014)
-        self._ringer.start()
-        deadline = self._clock.now() + self._config.ring_timeout
-        self._display.ring_started(self._ring_title(alarm), self._ring_detail(ring))
+        started = self._clock.now()
         outcome: Outcome = "unanswered"
-        try:
+        try:  # opened before the sound starts, so Ctrl-C at any point still settles the ring
+            self._ringer.start()
+            deadline = started + self._config.ring_timeout
+            self._display.ring_started(self._ring_title(alarm), self._ring_detail(ring))
             while (remaining := deadline - self._clock.now()) > timedelta(0):
                 seconds = int(remaining.total_seconds())
                 self._display.ring_tick(
@@ -125,6 +158,7 @@ class Runner:
         finally:
             self._ringer.stop()
             self._display.ring_ended()
+            self._busy.append((started, self._clock.now()))
             self._settle(alarm, state, ring, outcome)
 
     def _settle(self, alarm: Alarm, state: AlarmState, ring: Ring, outcome: Outcome) -> None:
@@ -193,14 +227,8 @@ class Runner:
             f"Too late to ring: the grace window is {format_duration(self._config.grace)}."
         )
 
-    def _show_watching(self) -> None:
+    def _show_watching(self, upcoming: list[tuple[datetime, Alarm]]) -> None:
         now = self._clock.now()
-        upcoming = []
-        for alarm in self._alarms:
-            state = self._states.get(alarm.id, AlarmState())
-            decision = evaluate(alarm, state, now, self._config.grace, self._tz)
-            if isinstance(decision, Idle) and decision.next_at is not None:
-                upcoming.append((decision.next_at, alarm))
         enabled = sum(a.enabled for a in self._alarms)
         first = min(upcoming, key=lambda pair: pair[0], default=None)
         key = (enabled, first[1].id if first else None, first[0] if first else None)

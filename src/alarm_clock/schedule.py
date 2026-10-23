@@ -6,7 +6,7 @@ Wall-clock times are resolved in the `tz` passed in (ADR-009, ADR-012).
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from typing import Literal
@@ -34,6 +34,8 @@ class Missed:
 
 
 Decision = Idle | Ring | Missed
+
+Interval = tuple[datetime, datetime]
 
 StatusKind = Literal["on", "off", "snoozed", "overdue", "done"]
 
@@ -115,10 +117,29 @@ def next_occurrence(
     return next(occurrences(alarm, max(_floor(alarm, state), to_utc(after)), tz), None)
 
 
+def excused_lateness(due: datetime, now: datetime, busy: Sequence[Interval]) -> timedelta:
+    """How late `due` is, not counting time the runner spent ringing other alarms (ADR-015)."""
+    late = now - due
+    for start, end in busy:
+        overlap = min(to_utc(end), now) - max(to_utc(start), due)
+        if overlap > timedelta(0):
+            late -= overlap
+    return late
+
+
 def evaluate(
-    alarm: Alarm, state: AlarmState, now: datetime, grace: timedelta, tz: tzinfo
+    alarm: Alarm,
+    state: AlarmState,
+    now: datetime,
+    grace: timedelta,
+    tz: tzinfo,
+    busy: Sequence[Interval] = (),
 ) -> Decision:
-    """What should the runner do with this alarm at `now`?"""
+    """What should the runner do with this alarm at `now`?
+
+    `busy` lists intervals the runner spent ringing; they don't count against the grace window.
+    `late_by` in the result is still the real lateness, for display.
+    """
     now = to_utc(now)
     if not alarm.enabled:
         return Idle(None)
@@ -134,18 +155,16 @@ def evaluate(
     # A fresh occurrence supersedes an older snooze: yesterday's snooze must not ring today.
     if due:
         latest = due[-1]
-        late_by = now - latest
-        if late_by <= grace:
-            return Ring(latest, late_by, skipped=len(due) - 1)
+        if excused_lateness(latest, now, busy) <= grace:
+            return Ring(latest, now - latest, skipped=len(due) - 1)
         return Missed(latest, len(due))
 
     snooze = active_snooze(alarm, state)
     if snooze is not None:
         occurrence, until = snooze
         if now >= until:
-            late_by = now - until
-            if late_by <= grace:
-                return Ring(occurrence, late_by, snoozed=True)
+            if excused_lateness(until, now, busy) <= grace:
+                return Ring(occurrence, now - until, snoozed=True)
             return Missed(occurrence, 1)
         upcoming = until if upcoming is None else min(upcoming, until)
 
@@ -157,15 +176,16 @@ def describe(alarm: Alarm, state: AlarmState, now: datetime, tz: tzinfo) -> Stat
     now = to_utc(now)
     if not alarm.enabled:
         return Status("off", None)
+    # Same precedence as evaluate(): a fresh due occurrence outranks an older snooze.
+    first = next(occurrences(alarm, _floor(alarm, state), tz), None)
+    if first is not None and first <= now:
+        return Status("overdue", first)
     snooze = active_snooze(alarm, state)
     if snooze is not None:
         until = snooze[1]
         return Status("snoozed" if until > now else "overdue", until)
-    first = next(occurrences(alarm, _floor(alarm, state), tz), None)
     if first is None:
         return Status("done", None)
-    if first <= now:
-        return Status("overdue", first)
     return Status("on", first)
 
 

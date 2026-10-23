@@ -24,6 +24,10 @@ if sys.platform == "win32":
             return False
         return True
 
+    def _lock_blocking(f: IO[str]) -> None:
+        f.seek(0)
+        msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)  # retries for ~10s, then OSError
+
     def _unlock(f: IO[str]) -> None:
         f.seek(0)
         msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
@@ -37,6 +41,9 @@ else:
         except BlockingIOError:
             return False
         return True
+
+    def _lock_blocking(f: IO[str]) -> None:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
 
     def _unlock(f: IO[str]) -> None:
         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
@@ -80,3 +87,15 @@ def runner_active(path: Path) -> bool:
             _unlock(f)
             return False
         return True
+
+
+@contextmanager
+def exclusive(path: Path) -> Iterator[None]:
+    """Blocking lock for short critical sections, e.g. a CLI read-modify-write of alarms.json."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a+", encoding="utf-8") as f:
+        _lock_blocking(f)
+        try:
+            yield
+        finally:
+            _unlock(f)

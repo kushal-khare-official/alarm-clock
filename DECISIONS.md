@@ -104,10 +104,16 @@ persistent data.
   reset.
 - IDs come from a monotonic `next_id` and are never reused.
 
-**Why.** With a single writer per file, no lock is needed around the data. A finished one-shot
+**Why.** With a single writer per file, the runner and the CLI never need to coordinate. A finished one-shot
 alarm shows as `done` by derivation (its watermark is at or past its only occurrence), so the
 runner never has to edit definitions. Because IDs are never reused, leftover state can't attach
 itself to a new alarm.
+
+*Amended after code review.* "Only the CLI writes `alarms.json`" still allowed *several* CLI
+processes to write at once, for example from a script or two terminals. A test with 8 parallel
+processes adding 5 alarms each lost alarms in 3 of 3 runs. Every read-modify-write of
+`alarms.json` now holds a short blocking lock on `alarms.json.lock`. The runner still never
+takes it, because it only reads that file.
 
 ## ADR-008: Single runner instance, enforced with an OS file lock
 
@@ -210,3 +216,26 @@ through a real pseudo-terminal.
 **Related.** `cbreak()` keeps `ISIG`, so Ctrl-C still works. The terminal settings are restored
 in a `finally` block, which also covers Ctrl-C. On Windows, a `\x03` from `getwch()` is turned
 into `KeyboardInterrupt` explicitly.
+
+## ADR-015: Runner-caused delay doesn't count against the grace window
+
+**Context. Found in code review.** Lateness was simply `now - occurrence`. That penalized delays
+the runner causes itself:
+- *Tick granularity.* With `--grace 0`, an alarm noticed 0.6 s after its time was reported as
+  missed, so alarms essentially never rang.
+- *Ringing another alarm.* With `--grace 5 --ring-timeout 10`, an alarm due two minutes into
+  another alarm's unanswered ring was judged 8 minutes late and reported as missed.
+
+**Options considered.**
+1. A CLI rule such as "grace must exceed ring timeout". This treats the symptom, still breaks
+   when several rings happen back to back, and forbids reasonable settings.
+2. Excuse the runner's own delays from the lateness calculation.
+
+**Decision.** Option 2.
+- `evaluate()` takes `busy`, a list of intervals the runner spent ringing, and subtracts their
+  overlap with `[occurrence, now]` (`excused_lateness`). The function stays pure, with the busy
+  intervals passed in as data.
+- The runner adds one tick of slack to the grace window.
+- A laptop sleeping or the runner being off is *not* excused. A test pins that down, so the fix
+  can't overcorrect.
+- `Ring.late_by` still reports the real lateness, so the user sees "8m late".

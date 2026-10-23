@@ -14,6 +14,7 @@ from alarm_clock.schedule import (
     Status,
     describe,
     evaluate,
+    excused_lateness,
     mark_handled,
     mark_snoozed,
     next_occurrence,
@@ -300,3 +301,22 @@ def test_no_occurrence_rings_twice_even_when_the_clock_jumps_around(
         elif isinstance(decision, Missed):
             state = mark_handled(state, decision.occurrence)
     assert len(rung) == len(set(rung))
+
+
+# --- regressions from the code review --------------------------------------------------------
+
+
+def test_excused_lateness_subtracts_only_the_overlapping_busy_time() -> None:
+    due, now = at(2026, 10, 23, 7, 2), at(2026, 10, 23, 7, 12)
+    ringing = [(at(2026, 10, 23, 7, 0), at(2026, 10, 23, 7, 10))]  # 8 of the 10 minutes
+    assert excused_lateness(due, now, ringing) == timedelta(minutes=2)
+    long_ago = [(at(2026, 10, 22, 7, 0), at(2026, 10, 22, 7, 10))]
+    assert excused_lateness(due, now, long_ago) == timedelta(minutes=10)
+
+
+def test_describe_prefers_a_fresh_due_occurrence_over_a_stale_snooze() -> None:
+    _, yesterdays_snooze = snoozed_at_0730()
+    now = at(2026, 10, 24, 7, 31)
+    assert describe(alarm(), yesterdays_snooze, now, NY) == Status(
+        "overdue", at(2026, 10, 24, 7, 30)
+    )

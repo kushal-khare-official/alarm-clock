@@ -236,3 +236,73 @@ def test_ring_timeout_and_grace_are_configurable(world: World) -> None:
     config = RunnerConfig(grace=timedelta(minutes=1), ring_timeout=timedelta(minutes=2))
     world.run_until(ny(7, 35), config)
     assert world.ringer.log[:2] == [("start", ny(7, 30)), ("stop", ny(7, 32))]
+
+
+# --- regressions from the code review (VALIDATION.md) ---------------------------------------
+
+
+def test_grace_zero_still_rings_an_alarm_noticed_within_one_tick(world: World) -> None:
+    standup(world)
+    world.clock.set(ny(7, 29, 59) + timedelta(milliseconds=600))  # ticks land at .6s
+    world.press((ny(7, 30, 3), "d"))
+    world.run_until(ny(7, 31), RunnerConfig(grace=timedelta(0)))
+    assert world.ringer.starts == [ny(7, 30) + timedelta(milliseconds=600)]
+
+
+@pytest.mark.parametrize("ringing_first", [True, False], ids=["later-in-list", "earlier-in-list"])
+def test_alarm_due_while_another_rings_is_not_counted_late(
+    world: World, ringing_first: bool
+) -> None:
+    """Grace 5m, ring timeout 10m: B comes due 2 minutes into A's unanswered ring."""
+    world.clock.set(ny(6, 59))
+    if ringing_first:
+        standup(world, at=time(7, 0), label="A")
+        standup(world, at=time(7, 2), label="B")
+    else:
+        standup(world, at=time(7, 2), label="B")
+        standup(world, at=time(7, 0), label="A")
+    config = RunnerConfig(grace=timedelta(minutes=5), ring_timeout=timedelta(minutes=10))
+    world.run_until(ny(7, 25), config)
+    assert [title for title, _ in world.display.rings] == ["07:00 A", "07:02 B"]
+    assert world.display.rings[1][1] == "8m late"
+    assert not [e for e in world.display.events if "missed" in e]
+
+
+def test_lateness_from_the_laptop_sleeping_is_still_not_excused(world: World) -> None:
+    standup(world)
+    world.clock.set(ny(7, 25))
+    sleep_through(world, ny(7, 50))  # 20 minutes late, and not because we were ringing
+    world.run_until(ny(7, 51))
+    assert world.ringer.starts == []
+
+
+def test_alarm_disabled_while_another_rings_does_not_ring_after_it(world: World) -> None:
+    standup(world, label="A")
+    standup(world, label="B")
+    cli = AlarmStore(world.alarms.path)
+
+    class DisablesBOnFirstRing(FakeRinger):
+        def start(self) -> None:
+            if not self.starts:
+                cli.set_enabled(2, False, world.clock.now())
+            super().start()
+
+    world.ringer = DisablesBOnFirstRing(world.clock)
+    world.press((ny(7, 30, 2), "d"), (ny(7, 30, 4), "d"))
+    world.run_until(ny(7, 31))
+    assert [title for title, _ in world.display.rings] == ["07:30 A"]
+
+
+def test_ctrl_c_as_the_sound_starts_still_settles_the_ring(world: World) -> None:
+    standup(world)
+
+    class InterruptedOnStart(FakeRinger):
+        def start(self) -> None:
+            super().start()
+            raise KeyboardInterrupt
+
+    world.ringer = InterruptedOnStart(world.clock)
+    with pytest.raises(KeyboardInterrupt):
+        world.run_until(ny(7, 31))
+    assert world.state().last_handled == ny(7, 30)
+    assert not world.ringer.ringing

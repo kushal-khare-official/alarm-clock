@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import sys
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 
@@ -111,6 +113,20 @@ def test_enabling_a_one_shot_re_arms_it(alarms: AlarmStore) -> None:
     assert alarms.set_enabled(a.id, True, LATER).anchor == LATER
 
 
+def _doc(**overrides: object) -> str:
+    entry = {
+        "id": 1,
+        "at": "07:30",
+        "days": [],
+        "label": "",
+        "enabled": True,
+        "snooze_minutes": 9,
+        "anchor": "2026-10-23T12:00:00+00:00",
+    }
+    entry.update(overrides)
+    return json.dumps({"schema_version": 1, "next_id": 2, "alarms": [entry]})
+
+
 @pytest.mark.parametrize(
     ("content", "reason"),
     [
@@ -119,6 +135,11 @@ def test_enabling_a_one_shot_re_arms_it(alarms: AlarmStore) -> None:
         ('{"schema_version": 99, "alarms": []}', "schema_version 99"),
         ('{"alarms": []}', "schema_version None"),
         ('{"schema_version": 1, "next_id": 2, "alarms": [{"id": 1}]}', "malformed entry"),
+        (_doc(enabled="false"), "enabled must be bool"),
+        (_doc(snooze_minutes=0), "snooze_minutes must be 1-60"),
+        (_doc(snooze_minutes=9.5), "snooze_minutes must be int"),
+        (_doc(id=True), "id must be int"),
+        (_doc(days=["mon", "funday"]), "malformed entry"),
         (
             '{"schema_version": 1, "next_id": 2, "alarms": [{"id": 1, "at": "25:00",'
             ' "days": [], "label": "", "enabled": true, "snooze_minutes": 9,'
@@ -159,7 +180,7 @@ def test_failed_write_keeps_the_old_file_and_leaves_no_temp_files(
     with pytest.raises(OSError, match="disk full"):
         alarms.add(time(8, 0), ONCE, "Lost", 9, now=T0)
     assert alarms.path.read_bytes() == before
-    assert sorted(p.name for p in alarms.path.parent.iterdir()) == ["alarms.json"]
+    assert not [p for p in alarms.path.parent.iterdir() if p.suffix == ".tmp"]
 
 
 def test_unserialisable_data_leaves_no_temp_files(tmp_path: Path) -> None:
@@ -193,3 +214,22 @@ def test_signature_changes_on_every_write(alarms: AlarmStore) -> None:
     first = alarms.signature()
     alarms.update(1, T0, label="same size?")
     assert alarms.signature() != first
+
+
+ADD_FIVE = """
+import sys
+from datetime import UTC, datetime, time
+from pathlib import Path
+from alarm_clock.store import AlarmStore
+store = AlarmStore(Path(sys.argv[1]))
+for _ in range(5):
+    store.add(time(7, 0), frozenset(), "", 9, now=datetime.now(UTC))
+"""
+
+
+def test_concurrent_cli_processes_lose_nothing(alarms: AlarmStore) -> None:
+    """Eight real processes adding five alarms each, all at once."""
+    procs = [subprocess.Popen([sys.executable, "-c", ADD_FIVE, str(alarms.path)]) for _ in range(8)]
+    assert [p.wait() for p in procs] == [0] * 8
+    ids = [a.id for a in alarms.load()]
+    assert sorted(ids) == list(range(1, 41))
