@@ -171,3 +171,37 @@ def test_no_warning_while_a_runner_holds_the_lock(env: cli.Env) -> None:
 def test_disable_does_not_warn(env: cli.Env) -> None:
     alarm("add", "7:30")
     assert alarm("disable", "1")[2] == ""
+
+
+def test_run_refuses_to_start_a_second_runner(env: cli.Env) -> None:
+    with single_instance(env.runner_lock):
+        code, _, err = alarm("run", "--sound", "bell")
+    assert code == 1
+    assert "another `alarm run` is already running" in err
+
+
+def test_run_end_to_end_without_a_terminal(env: cli.Env, clock: FakeClock) -> None:
+    """Real Runner, BellRinger and RichDisplay; only the clock is fake. With no TTY there are no
+    keys, so the ring runs to its timeout. Ctrl-C arrives at 00:10."""
+    alarm("add", "23:55", "-l", "Bed")
+    stop_at = datetime(2026, 10, 24, 0, 10, tzinfo=NY)
+
+    def ctrl_c_later(c: FakeClock) -> None:
+        if c.now() >= stop_at:
+            raise KeyboardInterrupt
+
+    clock.on_sleep = ctrl_c_later
+    code, out, _ = alarm("run", "--sound", "bell", "--ring-timeout", "3")
+    assert code == 0
+    lines = out.replace("\a", "").splitlines()
+    assert lines[0].endswith(
+        "alarm run: sound terminal bell, grace 15m, rings for up to 3m. Ctrl-C to stop."
+    )
+    assert any(
+        line.endswith("Watching 1 alarm. Next: #1 23:55 Bed at Fri 23 Oct 23:55 (in 3m)")
+        for line in lines
+    )
+    assert "23:55:00 RINGING 23:55 Bed" in out
+    assert "23:58:00 #1 23:55 Bed: no answer, silenced after 3m" in out
+    assert lines[-1] == "Stopped."
+    assert env.states.load()[1].last_handled == datetime(2026, 10, 23, 23, 55, tzinfo=NY)

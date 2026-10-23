@@ -102,9 +102,11 @@ def cbreak(fd: int) -> Iterator[PosixKeyReader]:
 
 
 @contextmanager
-def open_key_reader(stdin: IO[str]) -> Iterator[KeyReader]:
+def open_key_reader(
+    stdin: IO[str], sleep: Callable[[float], None] = time.sleep
+) -> Iterator[KeyReader]:
     if not stdin.isatty():
-        yield NullKeyReader()
+        yield NullKeyReader(sleep)
     elif sys.platform == "win32":
         import msvcrt
 

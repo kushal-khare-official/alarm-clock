@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import tzinfo
+from datetime import timedelta, tzinfo
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -18,8 +20,10 @@ from rich.table import Table
 
 from alarm_clock import __version__
 from alarm_clock.clock import Clock, SystemClock, local_zone
+from alarm_clock.display import RichDisplay
 from alarm_clock.fmt import describe_alarm, format_when
-from alarm_clock.lock import runner_active
+from alarm_clock.keys import open_key_reader
+from alarm_clock.lock import AlreadyRunning, runner_active, single_instance
 from alarm_clock.model import (
     SNOOZE_DEFAULT,
     SNOOZE_MAX,
@@ -33,6 +37,8 @@ from alarm_clock.model import (
     parse_label,
     parse_time,
 )
+from alarm_clock.ringer import select_ringer
+from alarm_clock.runner import Runner, RunnerConfig
 from alarm_clock.schedule import Status, describe
 from alarm_clock.store import AlarmStore, StateStore, StoreError
 
@@ -85,7 +91,7 @@ def _user_errors() -> Iterator[None]:
     """Expected failures become one clear line on stderr and exit code 1, not a traceback."""
     try:
         yield
-    except (AlarmError, StoreError) as e:
+    except (AlarmError, StoreError, AlreadyRunning) as e:
         _err().print(f"[red]error:[/red] {escape(str(e))}")
         raise typer.Exit(1) from e
 
@@ -255,3 +261,46 @@ def rm(alarm_id: IdArg) -> None:
         env = build_env()
         removed = env.alarms.remove(alarm_id)
         _out().print(f"Removed {escape(describe_alarm(removed))}")
+
+
+class Sound(StrEnum):
+    auto = "auto"
+    bell = "bell"
+
+
+@app.command()
+def run(
+    grace: Annotated[
+        int,
+        typer.Option(min=0, max=24 * 60, help="Still ring alarms up to this many minutes late."),
+    ] = 15,
+    ring_timeout: Annotated[
+        int, typer.Option(min=1, max=120, help="Stop ringing after this many minutes.")
+    ] = 10,
+    sound: Annotated[
+        Sound, typer.Option(help="auto: the platform's player; bell: terminal bell only.")
+    ] = Sound.auto,
+) -> None:
+    """Ring alarms when they are due. Keep this running; Ctrl-C to stop."""
+    with _user_errors():
+        env = build_env()
+        out = _out()
+        try:
+            with (
+                single_instance(env.runner_lock),
+                open_key_reader(sys.stdin, sleep=env.clock.sleep) as keys,
+            ):
+                ringer = select_ringer(prefer_bell=sound is Sound.bell)
+                display = RichDisplay(out, env.clock, env.tz)
+                display.event(
+                    f"alarm run: sound {ringer.name}, grace {grace}m, rings for up to "
+                    f"{ring_timeout}m. Ctrl-C to stop."
+                )
+                config = RunnerConfig(
+                    grace=timedelta(minutes=grace), ring_timeout=timedelta(minutes=ring_timeout)
+                )
+                Runner(
+                    env.alarms, env.states, env.clock, env.tz, ringer, keys, display, config
+                ).run()
+        except KeyboardInterrupt:
+            out.print("Stopped.")
