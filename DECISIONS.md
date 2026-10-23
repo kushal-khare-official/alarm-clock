@@ -195,3 +195,18 @@ outstanding.
 report the backlog once instead of ringing it N times. The search is bounded below by
 `max(anchor, last_handled)`, so the backlog can never reach back before the alarm existed or was
 last edited.
+
+## ADR-014: Throw away typed-ahead keys when a ring starts
+
+**Context. Found while designing the key reader.** The runner keeps the terminal in cbreak mode
+for its whole life. Without that, keys pressed while idle would echo over the display. But it
+also means a `d` typed by accident an hour earlier would sit in the input buffer and dismiss the
+next alarm the moment it starts ringing.
+
+**Decision.** `KeyReader.flush()` (`tcflush(TCIFLUSH)` on POSIX, draining `msvcrt` on Windows)
+runs at the start of every ring. Only keys pressed *while* the alarm is ringing count. Tested
+through a real pseudo-terminal.
+
+**Related.** `cbreak()` keeps `ISIG`, so Ctrl-C still works. The terminal settings are restored
+in a `finally` block, which also covers Ctrl-C. On Windows, a `\x03` from `getwch()` is turned
+into `KeyboardInterrupt` explicitly.

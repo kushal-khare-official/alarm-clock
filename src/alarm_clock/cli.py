@@ -19,6 +19,7 @@ from rich.table import Table
 from alarm_clock import __version__
 from alarm_clock.clock import Clock, SystemClock, local_zone
 from alarm_clock.fmt import describe_alarm, format_when
+from alarm_clock.lock import runner_active
 from alarm_clock.model import (
     SNOOZE_DEFAULT,
     SNOOZE_MAX,
@@ -54,6 +55,10 @@ class Env:
     states: StateStore
     clock: Clock
     tz: tzinfo
+
+    @property
+    def runner_lock(self) -> Path:
+        return self.home / "runner.lock"
 
 
 def build_env() -> Env:
@@ -105,12 +110,18 @@ def _status_text(status: Status, env: Env) -> str:
     }.get(status.kind, status.kind)
 
 
-def _report(verb: str, alarm: Alarm, env: Env) -> None:
+def _report(verb: str, alarm: Alarm, env: Env, *, check_runner: bool = True) -> None:
     state = env.states.load().get(alarm.id, AlarmState())
     status = describe(alarm, state, env.clock.now(), env.tz)
     out = _out()
     out.print(f"{verb} {escape(describe_alarm(alarm))}")
     out.print(f"  [{_STATUS_STYLE[status.kind]}]{escape(_status_text(status, env))}[/]")
+    # The main way this design fails is an alarm saved with nothing running to ring it (ADR-001).
+    if check_runner and alarm.enabled and not runner_active(env.runner_lock):
+        _err().print(
+            "[yellow]warning:[/yellow] no `alarm run` is active, so nothing will ring. "
+            "Start one in another terminal: [bold]alarm run[/bold]"
+        )
 
 
 def _print_version(value: bool) -> None:
@@ -233,7 +244,8 @@ def disable(alarm_id: IdArg) -> None:
     """Turn an alarm off without deleting it."""
     with _user_errors():
         env = build_env()
-        _report("Disabled", env.alarms.set_enabled(alarm_id, False, env.clock.now()), env)
+        disabled = env.alarms.set_enabled(alarm_id, False, env.clock.now())
+        _report("Disabled", disabled, env, check_runner=False)
 
 
 @app.command()

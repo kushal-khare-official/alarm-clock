@@ -6,6 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from alarm_clock import __version__, cli
+from alarm_clock.lock import single_instance
 from alarm_clock.model import AlarmState
 from alarm_clock.schedule import mark_handled
 from alarm_clock.store import AlarmStore, StateStore
@@ -152,3 +153,21 @@ def test_corrupt_store_is_reported_with_its_path(env: cli.Env) -> None:
     code, _, err = alarm("list")
     assert code == 1
     assert "alarms.json is not valid JSON" in err.replace("\n", "")
+
+
+def test_add_warns_when_no_runner_will_ring_it(env: cli.Env) -> None:
+    code, _, err = alarm("add", "7:30")
+    assert code == 0
+    assert "no `alarm run` is active" in err
+
+
+def test_no_warning_while_a_runner_holds_the_lock(env: cli.Env) -> None:
+    with single_instance(env.runner_lock):
+        code, _, err = alarm("add", "7:30")
+        assert (code, err) == (0, "")
+        assert alarm("edit", "1", "-l", "x")[2] == ""
+
+
+def test_disable_does_not_warn(env: cli.Env) -> None:
+    alarm("add", "7:30")
+    assert alarm("disable", "1")[2] == ""

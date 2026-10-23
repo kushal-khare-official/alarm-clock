@@ -24,6 +24,8 @@ jobs:
       - run: uv run ruff check
       - run: uv run ruff format --check
       - run: uv run mypy
+      - name: mypy as the other platforms see the code
+        run: uv run mypy --platform win32 && uv run mypy --platform linux && uv run mypy --platform darwin
       - run: uv run pytest
       - name: e2e (real pseudo-terminal)
         if: runner.os != 'Windows'
