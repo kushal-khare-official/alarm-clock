@@ -1,7 +1,7 @@
 # Validation
 
 This file records what was checked, how, and what each check found. Every result below was
-produced on the development machine (macOS 26.5, Python 3.11.13) unless marked otherwise.
+produced on the development machine (macOS 26.5, Python 3.11.13) unless marked as CI.
 
 ## Verified and not verified
 
@@ -17,8 +17,8 @@ produced on the development machine (macOS 26.5, Python 3.11.13) unless marked o
 | macOS sound plays, and no `afplay` process is left after Ctrl-C mid-ring | **Verified by process** (see Dogfood) | `pgrep afplay` sampled during and after the ring |
 | macOS sound is *audible* | **Needs a human** | I can't hear. Run the dogfood steps below. |
 | Linux sound (`paplay` / `pw-play`) | **Not heard** | Backend selection and command lines tested with fakes. The suite runs on `ubuntu-latest` in CI, which has no audio device. |
-| Windows sound (`winsound`) and key reading (`msvcrt`) | **Not run** | Tested with fake `winsound`/`msvcrt` modules. Type-checked as win32 (`mypy --platform win32`). The CI matrix includes `windows-latest`. |
-| CI is green on all 3 OSes | **Not yet run** | The workflow exists in `.github/workflows/ci.yml`. It runs only once the repo is pushed to GitHub. |
+| Windows sound (`winsound`) and key reading (`msvcrt`) | **Not heard or typed into** | Tested with fake `winsound`/`msvcrt` modules. The rest of the suite, including the real `msvcrt.locking` lock tests, passes on `windows-latest` in CI. |
+| CI is green on all 3 OSes | **Verified** | [Run 40011444050](https://github.com/kushal-khare-official/alarm-clock/actions/runs/40011444050): 6/6 jobs green (macOS, Ubuntu, Windows × Python 3.11, 3.13). Every job passes ruff, mypy for all 3 platforms, and pytest (184 tests on POSIX; 180 on Windows, where the 4 pty tests aren't collected). The real-terminal e2e passes on macOS and Ubuntu. The first run failed; see rows 12-13 below. |
 
 ## Layers of checking
 
@@ -67,9 +67,9 @@ noticed by luck.
 | 8 | Mutation testing | "IDs reused after delete" *survived*. The test removed only the newest alarm, and a broken counter passes that case. | Replaced with a Hypothesis property over random add/remove sequences. The mutation is now caught. |
 | 9 | Lint while writing e2e | The pty drain loop called a blocking `os.read`, which could hang the test forever. | `select`-guarded read. |
 | 10 | Reviewing the e2e test | If it started in the last second of a minute, `add` could anchor the alarm to *tomorrow*, giving a flaky timeout. | The test targets the minute after next when 10 seconds or less are left in the minute. |
+| 11 | Dogfooding | `pgrep` found no `afplay` while ringing. Investigated before trusting it: 12 samples show 10/12 present (the zeros are the gaps between respawns), and no bells were emitted, so the sound did play. But it showed that if the bell fallback ever happens, *nothing tells the user*. | The runner now reports "sound failed (...); rang the terminal bell instead", with a test. |
 | 12 | First CI run (all 6 jobs) | `test_snooze_out_of_range_is_a_usage_error` asserted on styled text. Typer forces colour when `GITHUB_ACTIONS` is set, so `--snooze` arrived split by ANSI codes. | The CLI test helper strips styling. The failure was reproduced locally with `GITHUB_ACTIONS=true` before the fix and passes after. |
 | 13 | First CI run (windows-latest, py3.13) | The lock-release test assumed the OS frees a killed process's lock immediately. Windows frees it asynchronously. | The test waits up to 10 s for the release. The behavior is documented in ADR-008. |
-| 11 | Dogfooding | `pgrep` found no `afplay` while ringing. Investigated before trusting it: 12 samples show 10/12 present (the zeros are the gaps between respawns), and no bells were emitted, so the sound did play. But it showed that if the bell fallback ever happens, *nothing tells the user*. | The runner now reports "sound failed (...); rang the terminal bell instead", with a test. |
 
 ## Code review findings
 
