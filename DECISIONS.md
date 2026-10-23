@@ -157,3 +157,33 @@ lookup as arguments.
 **Validation trade-off.** Only macOS can be heard and run by hand on the development machine.
 Linux and Windows are covered by unit tests with fakes and by a GitHub Actions matrix across all
 three OSes. VALIDATION.md lists these as *not heard on real hardware*.
+
+## ADR-012: Every instant is UTC internally; local time is only for resolving and display
+
+**Context. Found while writing the scheduler.** Python compares and subtracts two aware datetimes
+that share the same `tzinfo` object by their wall-clock fields alone, ignoring the UTC offset.
+`ZoneInfo` instances are cached per key, so two New York datetimes always share a `tzinfo`. This
+causes two bugs:
+- 01:30 EDT and 01:30 EST on fall-back day compare *equal*.
+- 03:05 EDT minus 01:50 EST is reported as 75 minutes. Only 15 real minutes have passed.
+
+**Decision.** `resolve()` converts each local wall time to a UTC instant right away. `evaluate()`
+and the state transitions normalize every input with `to_utc()`, which also rejects naive
+datetimes. State is stored in UTC. Local time is used only when converting a wall time into an
+instant and when printing.
+
+**Evidence.** `scripts/mutate_schedule.py` swaps UTC for local datetimes. Four DST tests fail
+under that change: gap, fold, lateness across the jump, and weekly cadence.
+
+## ADR-013: The anchor bounds the search for missed occurrences
+
+**Context. Found while writing the scheduler tests.** A test fixture had an anchor three weeks
+in the past, and every "rings on time" test came back as "rang, with 22 skipped". The code was
+right. An alarm created three weeks ago that no runner has ever handled *has* missed 22
+occurrences. But this showed that anchor and watermark together define what counts as
+outstanding.
+
+**Decision.** This is the intended behavior and is kept as is. `Ring.skipped` and `Missed.count`
+report the backlog once instead of ringing it N times. The search is bounded below by
+`max(anchor, last_handled)`, so the backlog can never reach back before the alarm existed or was
+last edited.
