@@ -63,6 +63,7 @@ class FakeRinger:
     def __init__(self, clock: FakeClock) -> None:
         self._clock = clock
         self.log: list[tuple[str, datetime]] = []
+        self.failed: Exception | None = None
 
     def start(self) -> None:
         self.log.append(("start", self._clock.now()))

@@ -80,6 +80,7 @@ class Runner:
         self._states = states.load()
         self._last_watching: tuple[int, int | None, datetime | None] | None = None
         self._busy: list[Interval] = []  # recent ring windows, excused from lateness (ADR-015)
+        self._told_sound_failed = False
 
     # --- loop ----------------------------------------------------------------------------------
 
@@ -159,6 +160,11 @@ class Runner:
             self._ringer.stop()
             self._display.ring_ended()
             self._busy.append((started, self._clock.now()))
+            if self._ringer.failed is not None and not self._told_sound_failed:
+                self._told_sound_failed = True
+                self._display.event(
+                    f"sound failed ({self._ringer.failed}); rang the terminal bell instead"
+                )
             self._settle(alarm, state, ring, outcome)
 
     def _settle(self, alarm: Alarm, state: AlarmState, ring: Ring, outcome: Outcome) -> None:

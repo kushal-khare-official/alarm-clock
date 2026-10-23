@@ -306,3 +306,14 @@ def test_ctrl_c_as_the_sound_starts_still_settles_the_ring(world: World) -> None
         world.run_until(ny(7, 31))
     assert world.state().last_handled == ny(7, 30)
     assert not world.ringer.ringing
+
+
+def test_sound_failure_is_reported_once_not_hidden(world: World) -> None:
+    """Found while dogfooding: the bell fallback worked, but nothing told the user."""
+    standup(world)
+    standup(world, at=time(7, 40))
+    world.ringer.failed = OSError("afplay: no output device")
+    world.press((ny(7, 30, 2), "d"), (ny(7, 40, 2), "d"))
+    world.run_until(ny(7, 41))
+    reports = [e for e in world.display.events if e.startswith("sound failed")]
+    assert reports == ["sound failed (afplay: no output device); rang the terminal bell instead"]

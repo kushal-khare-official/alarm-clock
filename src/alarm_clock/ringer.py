@@ -31,6 +31,7 @@ class Process(Protocol):
 
 class Ringer(Protocol):
     name: str
+    failed: Exception | None  # set if the real sound failed and the bell took over
 
     def start(self) -> None: ...
 
@@ -43,6 +44,7 @@ class BellRinger:
     """Terminal bell every `interval` seconds. Works anywhere there is a terminal."""
 
     name = "terminal bell"
+    failed: Exception | None = None
 
     def __init__(self, stream: IO[str] | None = None, interval: float = 1.5) -> None:
         self._stream = stream
@@ -145,6 +147,7 @@ class WinsoundRinger:
     """Windows system sound, looped by the OS itself (SND_LOOP needs SND_ASYNC)."""
 
     name = "winsound SystemExclamation"
+    failed: Exception | None = None
 
     def __init__(self, winsound: ModuleType | None = None) -> None:
         if winsound is None:
