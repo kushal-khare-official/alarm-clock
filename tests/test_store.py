@@ -4,6 +4,8 @@ from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from alarm_clock.model import ONCE, WEEKDAYS, AlarmError, AlarmState
 from alarm_clock.store import AlarmStore, StateStore, StoreError, atomic_write_json
@@ -19,7 +21,7 @@ def alarms(tmp_path: Path) -> AlarmStore:
 
 def test_missing_file_means_no_alarms(alarms: AlarmStore) -> None:
     assert alarms.load() == []
-    assert alarms.mtime_ns() is None
+    assert alarms.signature() is None
 
 
 def test_round_trip(alarms: AlarmStore) -> None:
@@ -42,6 +44,24 @@ def test_ids_are_never_reused(alarms: AlarmStore) -> None:
     second = alarms.add(time(8, 0), ONCE, "", 9, now=T0)
     alarms.remove(second.id)
     assert alarms.add(time(9, 0), ONCE, "", 9, now=T0).id == 3
+
+
+@settings(max_examples=50)
+@given(ops=st.lists(st.one_of(st.just("add"), st.integers(0, 10)), max_size=25))
+def test_no_id_is_ever_issued_twice(
+    tmp_path_factory: pytest.TempPathFactory, ops: list[object]
+) -> None:
+    """Any interleaving of adds and removes (by position in the current list)."""
+    store = AlarmStore(tmp_path_factory.mktemp("ids") / "alarms.json")
+    issued: list[int] = []
+    for op in ops:
+        current = store.load()
+        if op == "add":
+            new_id = store.add(time(7, 0), ONCE, "", 9, now=T0).id
+            assert new_id not in issued
+            issued.append(new_id)
+        elif isinstance(op, int) and current:
+            store.remove(current[op % len(current)].id)
 
 
 def test_unknown_id_is_a_user_error(alarms: AlarmStore) -> None:
@@ -81,9 +101,9 @@ def test_disable_then_enable_re_arms_from_now(alarms: AlarmStore) -> None:
 
 def test_enabling_an_enabled_recurring_alarm_is_a_no_op(alarms: AlarmStore) -> None:
     a = alarms.add(time(7, 30), WEEKDAYS, "", 9, now=T0)
-    before = alarms.path.stat().st_mtime_ns
+    before = alarms.signature()
     assert alarms.set_enabled(a.id, True, LATER).anchor == T0
-    assert alarms.path.stat().st_mtime_ns == before  # nothing was written
+    assert alarms.signature() == before  # nothing was written
 
 
 def test_enabling_a_one_shot_re_arms_it(alarms: AlarmStore) -> None:
@@ -166,3 +186,10 @@ def test_state_malformed_is_reported(tmp_path: Path) -> None:
     path.write_text('{"schema_version": 1, "alarms": {"1": {"last_handled": "yesterday"}}}')
     with pytest.raises(StoreError, match="malformed entry"):
         StateStore(path).load()
+
+
+def test_signature_changes_on_every_write(alarms: AlarmStore) -> None:
+    alarms.add(time(7, 30), ONCE, "", 9, now=T0)
+    first = alarms.signature()
+    alarms.update(1, T0, label="same size?")
+    assert alarms.signature() != first

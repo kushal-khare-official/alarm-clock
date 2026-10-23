@@ -203,12 +203,14 @@ class AlarmStore:
             self._write(next_id, [updated if a.id == alarm_id else a for a in alarms])
         return updated
 
-    def mtime_ns(self) -> int | None:
-        """Change detector for the runner's hot reload."""
+    def signature(self) -> tuple[int, int, int] | None:
+        """Change detector for the runner's hot reload. Every atomic write creates a new inode, so
+        this changes even when two writes land within one coarse mtime tick."""
         try:
-            return self.path.stat().st_mtime_ns
+            st = self.path.stat()
         except FileNotFoundError:
             return None
+        return (st.st_ino, st.st_mtime_ns, st.st_size)
 
 
 class StateStore:
