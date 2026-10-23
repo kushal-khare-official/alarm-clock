@@ -1,5 +1,6 @@
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -55,6 +56,12 @@ def test_lock_is_released_when_the_holder_is_killed(tmp_path: Path) -> None:
     finally:
         holder.kill()
         holder.wait()
+    # POSIX releases flock locks the instant the process dies. Windows releases them
+    # asynchronously ("the time it takes ... depends upon available system resources",
+    # LockFileEx docs), which CI showed on windows-latest/py3.13. Wait, but not forever.
+    deadline = time.monotonic() + 10
+    while runner_active(lock) and time.monotonic() < deadline:
+        time.sleep(0.05)
     assert runner_active(lock) is False
     with single_instance(lock):
         pass

@@ -3,6 +3,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+from rich.text import Text
 from typer.testing import CliRunner
 
 from alarm_clock import __version__, cli
@@ -39,8 +40,14 @@ runner = CliRunner()
 
 
 def alarm(*args: str) -> tuple[int, str, str]:
+    """Exit code, stdout, stderr, with styling removed. Typer forces colour when it sees
+    GITHUB_ACTIONS, so assertions must not depend on whether the run looks like a terminal."""
     result = runner.invoke(cli.app, list(args))
-    return result.exit_code, result.stdout, result.stderr
+    return result.exit_code, unstyle(result.stdout), unstyle(result.stderr)
+
+
+def unstyle(text: str) -> str:
+    return Text.from_ansi(text).plain if "\x1b" in text else text
 
 
 def test_version() -> None:

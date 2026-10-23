@@ -125,6 +125,13 @@ dies, so there is no stale pidfile to clean up. A second runner exits with a mes
 **Why.** Two runners would ring twice and both write `state.json`, which would break the
 one-writer rule in ADR-007.
 
+*Learned from CI.* On POSIX, `flock` is released the instant the holder dies. Windows releases a
+dead process's locks *asynchronously*: "the time it takes ... depends upon available system
+resources" (`LockFileEx` docs). `windows-latest`/py3.13 showed this in the very first CI run. In
+practice, `alarm run` restarted the moment after a crash on Windows can briefly report "already
+running"; running it again a second later works. This is accepted rather than worked around. A
+retry loop would also delay the legitimate "already running" error on every platform.
+
 ## ADR-009: Wall-clock semantics, real-time lateness, defined DST behavior
 
 **Decision.** `07:30` means 07:30 local wall-clock time on each matching day. Occurrences are
