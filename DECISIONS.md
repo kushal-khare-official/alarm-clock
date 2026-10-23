@@ -136,8 +136,16 @@ year.
 ## ADR-010: A snooze is runner state, not a new alarm
 
 **Decision.** Snoozing stores `snoozed_until`, together with the occurrence being snoozed, in
-`state.json`. A snooze therefore survives a runner restart. Editing or disabling the alarm
-cancels the snooze, because the alarm's anchor moves past the snoozed occurrence.
+`state.json`. A snooze therefore survives a runner restart. A snooze is cancelled when the
+anchor moves past the snoozed occurrence. That happens when the alarm's time or days change, or
+when it is re-enabled after being disabled. Changing only the label or the snooze length moves
+neither the anchor nor the snooze.
+
+*Refined during implementation.* The plan said "editing cancels the snooze". While writing
+`AlarmStore.update` it became clear that renaming a snoozed alarm shouldn't silence it. So
+`update` re-anchors only when the schedule itself changes. For the same reason, enabling an
+alarm that is already enabled and recurring is a no-op. Enabling a one-shot always re-arms it,
+which is how a finished (`done`) one-shot gets scheduled again.
 
 ## ADR-011: Each platform behind a small interface, chosen by a pure function *(Q&A: cross-platform sound)*
 
