@@ -11,6 +11,12 @@ sound. Terminal recorders capture no audio, so the alarm sound in the MP4 was ad
 It is the same `Glass.aiff` the app plays, placed where the ALARM panel is on screen
 ([how](#regenerating-the-demo)). The GIF is silent.
 
+**How it was built:** [`docs/process/process.mp4`](docs/process/process.mp4) is a 4-minute
+narrated walkthrough of the process: the requirements Q&A, the plan, validation, what the checks
+caught, and the code review. The narration is a synthetic voice (macOS "Jamie") reading
+[a script](docs/process/narration.md) that Claude drafted from the project history and I
+reviewed. Captions are in the MP4 and in [`process.srt`](docs/process/process.srt).
+
 ```
 $ alarm add 07:30 --days weekdays -l Standup
 Added #1  07:30  Mon-Fri  "Standup"
@@ -155,6 +161,13 @@ vhs docs/demo/demo.tape
 
 ```bash
 uv run python scripts/demo_audio.py
+```
+
+The narrated walkthrough is built the same way. It needs the "Jamie (Premium)" voice
+(System Settings → Accessibility → Spoken Content) and takes about 6 minutes:
+
+```bash
+uv run python scripts/process_video.py
 ```
 
 The recording takes about 4 minutes, because it waits for a real minute boundary and runs the
