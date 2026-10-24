@@ -3,6 +3,14 @@
 A terminal alarm clock. Save alarms with a few commands, keep `alarm run` open, and it rings
 them: on time, after the laptop wakes, across DST changes, with snooze.
 
+![demo](docs/demo/demo.gif)
+
+The demo runs about 80 seconds: add alarms, ring, snooze, dismiss, a second runner refused, then
+the test suite, the mutation check and CI. [`docs/demo/demo.mp4`](docs/demo/demo.mp4) has
+sound. Terminal recorders capture no audio, so the alarm sound in the MP4 was added afterwards.
+It is the same `Glass.aiff` the app plays, placed where the ALARM panel is on screen
+([how](#regenerating-the-demo)). The GIF is silent.
+
 ```
 $ alarm add 07:30 --days weekdays -l Standup
 Added #1  07:30  Mon-Fri  "Standup"
@@ -129,6 +137,29 @@ uv run python scripts/mutate.py
 The project also runs `uv run ruff check`, `uv run ruff format --check` and `uv run mypy`
 (strict, over src, tests and scripts). CI runs all of it on macOS, Linux and Windows with Python
 3.11 and 3.13, and type-checks each platform's view of the code (`mypy --platform`).
+
+### Regenerating the demo
+
+The demo is a script too. [`docs/demo/demo.tape`](docs/demo/demo.tape) drives the real CLI and
+runner in tmux with [VHS](https://github.com/charmbracelet/vhs), against a throwaway
+`ALARM_CLOCK_HOME`. [`scripts/demo_audio.py`](scripts/demo_audio.py) finds the frames where the
+ALARM panel is visible and adds the sound there.
+
+```bash
+brew install vhs tmux
+```
+
+```bash
+vhs docs/demo/demo.tape
+```
+
+```bash
+uv run python scripts/demo_audio.py
+```
+
+The recording takes about 4 minutes, because it waits for a real minute boundary and runs the
+mutation check. The finished video cuts those waits; the runner's timestamps show where. The
+real alarm sound plays during the recording.
 
 ## Known limitations
 

@@ -132,3 +132,24 @@ uv run alarm run
 
 You should hear the macOS "Glass" sound repeating. Press `s` and it rings again a minute later.
 Press `d` to dismiss.
+
+## Demo video
+
+`docs/demo/demo.tape` records the real CLI and runner with VHS. `scripts/demo_audio.py` adds
+the alarm sound. Neither tool's exit code was taken as proof that the video was right. Each
+render was checked by looking at stills from every scene, and the audio placement was checked
+against measured frames. Five renders were needed. Each problem below was found by those checks:
+
+| Render | Problem | Found by | Fix |
+|---|---|---|---|
+| 1 | Keystrokes landed in the wrong tmux pane, so the runner started in the CLI pane. | The VHS log's screen dump on timeout | Focus is now *verified* before each step that depends on it: the tape waits for `IN=%1` printed by `$TMUX_PANE`, or for the runner's `Stopped.`. |
+| 2 | Hidden setup commands were visible in the opening seconds, and lines were garbled. The `Wait /READY/` had matched the typed command `echo READY` itself, so it never waited. | A contact sheet of stills | The marker is typed as `"REA""DY"`, so only the command's output matches. |
+| 2 | Two back-to-back rings looked like a single red region, because there's no gap frame between them. | Dry-running the detector on the render | Rings are segmented by a jump in the panel's position (the runner prints an event line between rings). |
+| 3-4 | The panel's rounded corners and the `gh` table's ✓ were drawn as `_`. I first blamed the font (wrong: switching fonts changed nothing). The real cause is that tmux replaces UTF-8 characters when it thinks the terminal lacks UTF-8. | Full-resolution crops, then a side-by-side tmux test | `tmux -u` plus `LANG`. CI is shown as JSON `"conclusion": "success"`, not a glyph. |
+| audio | The first audio pass ran on past the video's end. An unbounded `apad` plus `-shortest` made ffmpeg fail with "No space left on device" (the disk had 13 GiB free). A later attempt with `apad=whole_dur` produced only a 35.8 s track. | The script's own exit code, then `ffprobe` stream durations | A finite silent bed (`anullsrc` with an exact duration) sets the track length, plus hard `-t` and `-fs 64M` caps. Verified on a scratch copy first. |
+
+**Final video** (render 5):
+- **Length and format:** 80.6 s. H.264 video and AAC audio, both 80.6 s long. 944 KB MP4 and 685 KB GIF.
+- **Video untouched:** the MP4's video stream is bit-identical to the silent recording, so adding audio changed nothing else.
+- **Sound placement:** detected rings at 26.6-30.9 s (Tea, snoozed) and 30.9-35.8 s (Stretch, dismissed), matching the tape. `volumedetect` gives -91 dB (digital silence) before the first ring and after the second, and peaks of -14 dB (Glass.aiff's own level) inside both.
+- **Scenes:** stills of every scene were checked, as were full-resolution crops of the ALARM panel (rounded corners render) and the CI result (`"conclusion": "success"`).
